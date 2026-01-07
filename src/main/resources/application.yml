@@ -13,6 +13,7 @@ logging:
 
 kiwoom:
   api:
+    # ???? REST API ??
     base-url: "https://openapi.kiwoom.com"
     key: "" # ?? Open API App Key
     secret: "" # ?? Open API App Secret
