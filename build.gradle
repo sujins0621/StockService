@@ -1,0 +1,43 @@
+plugins {
+    id 'java'
+    id 'org.springframework.boot' version '4.0.1'
+    id 'io.spring.dependency-management' version '1.1.7'
+}
+
+group = 'com.sjoh'
+version = '0.0.1-SNAPSHOT'
+description = 'KioomStock'
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(17)
+    }
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    implementation 'org.springframework.boot:spring-boot-starter'
+
+    // 2. 키움 REST API 통신용 (WebClient)
+    // RestTemplate보다 최신이며 비동기 처리에 능숙해서 매매 프로그램에 필수입니다.
+    implementation 'org.springframework.boot:spring-boot-starter-webflux'
+
+    // 3. JSON 데이터 파싱 (API 응답 처리)
+    // 키움 API는 데이터를 JSON으로 주고받기 때문에 필수입니다.
+    implementation 'com.fasterxml.jackson.core:jackson-databind'
+
+    // 4. 보일러플레이트 코드 제거 (Getter, Setter, Logging)
+    compileOnly 'org.projectlombok:lombok'
+    annotationProcessor 'org.projectlombok:lombok'
+
+    // 5. 테스트용
+    testImplementation 'org.springframework.boot:spring-boot-starter-test'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+tasks.named('test') {
+    useJUnitPlatform()
+}
