@@ -9,7 +9,7 @@ import org.springframework.web.reactive.function.client.WebClient;
 public class WebClientConfig {
 
     // 키움증권 REST API 기본 URL (가이드 참조)
-    @Value("${kiwoom.api.base-url:https://openapi.kiwoom.com}")
+    @Value("${kiwoom.api.base-url:https://api.kiwoom.com}")
     private String baseUrl;
 
     @Bean

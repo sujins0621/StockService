@@ -55,7 +55,7 @@ public class KiwoomAuthService {
         }
         return refreshAccessToken();
     }
-
+//application/json;charset=UTF-8
     public Mono<String> refreshAccessToken() {
         MultiValueMap<String, String> formData = new LinkedMultiValueMap<>();
         formData.add("grant_type", "client_credentials");
@@ -63,7 +63,7 @@ public class KiwoomAuthService {
         formData.add("appsecret", apiSecret);
 
         return webClient.post()
-                .uri("/oauth2.0/token")
+                .uri("/oauth2/token")
                 .contentType(MediaType.APPLICATION_FORM_URLENCODED)
                 .bodyValue(formData)
                 .retrieve()

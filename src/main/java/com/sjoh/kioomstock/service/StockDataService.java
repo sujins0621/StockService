@@ -1,6 +1,7 @@
 package com.sjoh.kioomstock.service;
 
 import com.sjoh.kioomstock.domain.StockPriceInfo;
+import com.sjoh.kioomstock.repository.StockPriceInfoRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -11,7 +12,6 @@ import reactor.core.publisher.Mono;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 
 @Service
 public class StockDataService {
@@ -20,17 +20,16 @@ public class StockDataService {
 
     private final WebClient webClient;
     private final KiwoomAuthService authService;
+    private final StockPriceInfoRepository stockPriceInfoRepository;
 
     // 모니터링할 종목 리스트 (예: 삼성전자 005930)
     // 실제로는 DB나 설정 파일에서 관리하는 것이 좋습니다.
     private final List<String> targetStockCodes = List.of("005930");
 
-    // 수집된 데이터를 임시 저장할 저장소 (실제로는 DB에 저장해야 함)
-    private final Map<String, List<StockPriceInfo>> dataStore = new ConcurrentHashMap<>();
-
-    public StockDataService(WebClient webClient, KiwoomAuthService authService) {
+    public StockDataService(WebClient webClient, KiwoomAuthService authService, StockPriceInfoRepository stockPriceInfoRepository) {
         this.webClient = webClient;
         this.authService = authService;
+        this.stockPriceInfoRepository = stockPriceInfoRepository;
     }
 
     // 평일 09:00 ~ 15:30 사이에 1분마다 실행 (장 운영 시간)
@@ -81,23 +80,28 @@ public class StockDataService {
             throw new RuntimeException("Invalid API response for " + stockCode);
         }
 
-        // 예시 필드명 매핑
-        double volumePower = Double.parseDouble(output.getOrDefault("stck_prpr", "0")); // 체결강도 필드명 확인 필요
-        long volume = Long.parseLong(output.getOrDefault("acml_vol", "0"));
-        long currentPrice = Long.parseLong(output.getOrDefault("stck_prpr", "0"));
+        // 예시 필드명 매핑 (실제 키움 API 문서 확인 필요)
+        // 체결강도, 매수잔량, 매도잔량, 거래량, 현재가, 시가
+        double volumePower = Double.parseDouble(output.getOrDefault("stck_prpr", "0")); // 체결강도 (API 필드명 확인 필요)
+        long buyRemain = Long.parseLong(output.getOrDefault("total_bid_remn", "0")); // 매수잔량 (API 필드명 확인 필요)
+        long sellRemain = Long.parseLong(output.getOrDefault("total_ask_remn", "0")); // 매도잔량 (API 필드명 확인 필요)
+        long volume = Long.parseLong(output.getOrDefault("acml_vol", "0")); // 거래량
+        long currentPrice = Long.parseLong(output.getOrDefault("stck_prpr", "0")); // 현재가
+        long openPrice = Long.parseLong(output.getOrDefault("stck_oprc", "0")); // 시가
 
         return StockPriceInfo.builder()
                 .stockCode(stockCode)
                 .time(LocalDateTime.now())
                 .volumePower(volumePower)
+                .buyRemain(buyRemain)
+                .sellRemain(sellRemain)
                 .volume(volume)
                 .currentPrice(currentPrice)
+                .openPrice(openPrice)
                 .build();
     }
 
     private void saveData(StockPriceInfo info) {
-        // 메모리에 저장 (추후 DB 저장 로직으로 대체)
-        dataStore.computeIfAbsent(info.getStockCode(), k -> new java.util.concurrent.CopyOnWriteArrayList<>())
-                .add(info);
+        stockPriceInfoRepository.save(info);
     }
 }
