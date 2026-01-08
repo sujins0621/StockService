@@ -9,7 +9,9 @@ import lombok.NoArgsConstructor;
 import java.time.LocalDateTime;
 
 @Entity
-@Table(name = "stock_price_info")
+@Table(name = "stock_price_info", uniqueConstraints = {
+        @UniqueConstraint(columnNames = {"stockCode", "time"})
+})
 @Data
 @Builder
 @NoArgsConstructor

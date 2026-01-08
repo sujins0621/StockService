@@ -1,7 +1,9 @@
 package com.sjoh.kioomstock.service;
 
+import com.sjoh.kioomstock.domain.StockDailyCandle;
 import com.sjoh.kioomstock.domain.StockOrderBook;
 import com.sjoh.kioomstock.domain.StockPriceInfo;
+import com.sjoh.kioomstock.repository.StockDailyCandleRepository;
 import com.sjoh.kioomstock.repository.StockOrderBookRepository;
 import com.sjoh.kioomstock.repository.StockPriceInfoRepository;
 import org.slf4j.Logger;
@@ -20,6 +22,7 @@ import java.time.format.DateTimeFormatter;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 @Service
 public class StockDataService {
@@ -30,15 +33,17 @@ public class StockDataService {
     private final KiwoomAuthService authService;
     private final StockPriceInfoRepository stockPriceInfoRepository;
     private final StockOrderBookRepository stockOrderBookRepository;
+    private final StockDailyCandleRepository stockDailyCandleRepository;
 
     // 모니터링할 종목 리스트 (예: 삼성전자 005930)
     private final List<String> targetStockCodes = List.of("005930");
 
-    public StockDataService(WebClient webClient, KiwoomAuthService authService, StockPriceInfoRepository stockPriceInfoRepository, StockOrderBookRepository stockOrderBookRepository) {
+    public StockDataService(WebClient webClient, KiwoomAuthService authService, StockPriceInfoRepository stockPriceInfoRepository, StockOrderBookRepository stockOrderBookRepository, StockDailyCandleRepository stockDailyCandleRepository) {
         this.webClient = webClient;
         this.authService = authService;
         this.stockPriceInfoRepository = stockPriceInfoRepository;
         this.stockOrderBookRepository = stockOrderBookRepository;
+        this.stockDailyCandleRepository = stockDailyCandleRepository;
     }
 
     // 평일 09:00 ~ 15:30 사이에 1분마다 실행 (장 운영 시간)
@@ -51,10 +56,12 @@ public class StockDataService {
                 .flatMapMany(token -> Flux.fromIterable(targetStockCodes)
                         .flatMap(code -> Mono.zip(
                                 fetchStockPrice(token, code),
-                                fetchOrderBook(token, code)
+                                fetchOrderBook(token, code),
+                                fetchDailyCandle(token, code)
                         ).doOnNext(tuple -> {
                             List<StockPriceInfo> priceInfos = tuple.getT1();
                             StockOrderBook orderBook = tuple.getT2();
+                            List<StockDailyCandle> dailyCandles = tuple.getT3();
 
                             if (priceInfos != null && !priceInfos.isEmpty()) {
                                 logger.info("Collected {} data points for {}", priceInfos.size(), code);
@@ -63,6 +70,10 @@ public class StockDataService {
                             if (orderBook != null) {
                                 logger.info("Collected order book for {}: {}", code, orderBook);
                                 saveOrderBook(orderBook);
+                            }
+                            if (dailyCandles != null && !dailyCandles.isEmpty()) {
+                                logger.info("Collected {} daily candles for {}", dailyCandles.size(), code);
+                                saveDailyCandles(dailyCandles);
                             }
                         }).onErrorResume(error -> {
                             logger.error("Error collecting data for {}", code, error);
@@ -103,15 +114,10 @@ public class StockDataService {
         requestBody.put("stk_cd", stockCode);
 
         return webClient.post()
-                .uri("/api/dostk/mrkcond") // 주식 호가 잔량 조회 (가이드에 따라 경로 확인 필요, 여기선 mrkcond로 가정하나 실제론 다를 수 있음)
-                // 가이드에 따르면 /api/dostk/mrkcond 가 맞는지 확인 필요. 
-                // 이전 요청은 ka10046(체결강도)였고, 이번엔 ka10004(호가잔량)임.
-                // 보통 같은 엔드포인트에 api-id로 구분하거나, 엔드포인트가 다를 수 있음.
-                // 여기서는 가이드에 명시된 경로가 없으므로 이전과 동일하게 하되 api-id 변경.
-                // 만약 경로가 다르다면 수정 필요. (질문 내용: /api/dostk/mrkcond)
+                .uri("/api/dostk/mrkcond")
                 .contentType(MediaType.APPLICATION_JSON)
                 .header("Authorization", "Bearer " + token)
-                .header("api-id", "ka10004") // 호가 잔량 조회 TR ID
+                .header("api-id", "ka10004")
                 .bodyValue(requestBody)
                 .retrieve()
                 .bodyToMono(Map.class)
@@ -122,6 +128,32 @@ public class StockDataService {
                 .onErrorResume(e -> {
                     logger.error("OrderBook API call failed for {}: {}", stockCode, e.getMessage());
                     return Mono.empty();
+                });
+    }
+
+    private Mono<List<StockDailyCandle>> fetchDailyCandle(String token, String stockCode) {
+        logger.info("fetchDailyCandle CALL for {}", stockCode);
+
+        Map<String, String> requestBody = new HashMap<>();
+        requestBody.put("stk_cd", stockCode);
+        requestBody.put("base_dt", LocalDate.now().format(DateTimeFormatter.ofPattern("yyyyMMdd"))); // 오늘 날짜 기준
+        requestBody.put("upd_stkpc_tp", "0"); // 수정주가구분 (0: 미적용, 1: 적용) - 가이드에 따라 선택
+
+        return webClient.post()
+                .uri("/api/dostk/chart") // 주식 일봉 차트 조회
+                .contentType(MediaType.APPLICATION_JSON)
+                .header("Authorization", "Bearer " + token)
+                .header("api-id", "ka10081") // TR ID
+                .bodyValue(requestBody)
+                .retrieve()
+                .bodyToMono(Map.class)
+                .map(response -> {
+                    logger.info("DailyCandle API Response for {}: {}", stockCode, response);
+                    return parseDailyCandleResponse(stockCode, (Map<String, Object>) response);
+                })
+                .onErrorResume(e -> {
+                    logger.error("DailyCandle API call failed for {}: {}", stockCode, e.getMessage());
+                    return Mono.just(List.of());
                 });
     }
 
@@ -148,13 +180,11 @@ public class StockDataService {
 
     private StockOrderBook parseOrderBookResponse(String stockCode, Map<String, Object> response) {
         try {
-            // 응답 구조: 최상위 레벨에 필드 존재 (output 래퍼 없음)
             Map<String, Object> data = response;
             if (response.containsKey("output")) {
                 data = (Map<String, Object>) response.get("output");
             }
 
-            // 시간 파싱
             LocalDateTime time = LocalDateTime.now();
             String timeStr = getString(data, "bid_req_base_tm");
             if (timeStr != null && timeStr.length() == 6) {
@@ -176,6 +206,30 @@ public class StockDataService {
         } catch (Exception e) {
             logger.error("Error parsing order book response for {}: {}", stockCode, e.getMessage());
             return null;
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<StockDailyCandle> parseDailyCandleResponse(String stockCode, Map<String, Object> response) {
+        try {
+            List<Map<String, String>> chartData = (List<Map<String, String>>) response.get("stk_dt_pole_chart_qry");
+
+            if (chartData == null || chartData.isEmpty()) {
+                logger.warn("No daily candle data found for {}: {}", stockCode, response);
+                return List.of();
+            }
+
+            // 최근 일주일(7일) 데이터만 필터링
+            LocalDate oneWeekAgo = LocalDate.now().minusDays(7);
+
+            return chartData.stream()
+                    .map(data -> mapToStockDailyCandle(stockCode, data))
+                    .filter(candle -> !candle.getDate().isBefore(oneWeekAgo)) // 7일 이전 데이터 제외
+                    .collect(Collectors.toList());
+
+        } catch (Exception e) {
+            logger.error("Error parsing daily candle response for {}: {}", stockCode, e.getMessage());
+            return List.of();
         }
     }
 
@@ -222,6 +276,32 @@ public class StockDataService {
                 .build();
     }
 
+    private StockDailyCandle mapToStockDailyCandle(String stockCode, Map<String, String> data) {
+        LocalDate date = LocalDate.now();
+        String dateStr = data.get("dt");
+        if (dateStr != null && dateStr.length() == 8) {
+            try {
+                date = LocalDate.parse(dateStr, DateTimeFormatter.ofPattern("yyyyMMdd"));
+            } catch (Exception e) {
+                logger.warn("Failed to parse date: {}", dateStr);
+            }
+        }
+
+        return StockDailyCandle.builder()
+                .stockCode(stockCode)
+                .date(date)
+                .closePrice(parseLong(data.get("cur_prc")))
+                .volume(parseLong(data.get("trde_qty")))
+                .tradingValue(parseLong(data.get("trde_prica")))
+                .openPrice(parseLong(data.get("open_pric")))
+                .highPrice(parseLong(data.get("high_pric")))
+                .lowPrice(parseLong(data.get("low_pric")))
+                .changeFromPrev(parseLong(data.get("pred_pre")))
+                .changeSign(data.getOrDefault("pred_pre_sig", ""))
+                .turnoverRate(parseDouble(data.get("trde_tern_rt")))
+                .build();
+    }
+
     private String getString(Map<String, Object> data, String key) {
         return data.getOrDefault(key, "").toString();
     }
@@ -253,10 +333,30 @@ public class StockDataService {
     }
 
     private void saveData(List<StockPriceInfo> infoList) {
-        stockPriceInfoRepository.saveAll(infoList);
+        for (StockPriceInfo info : infoList) {
+            // 중복 체크: 이미 존재하는 데이터면 저장하지 않음 (또는 업데이트)
+            if (stockPriceInfoRepository.findByStockCodeAndTime(info.getStockCode(), info.getTime()).isEmpty()) {
+                stockPriceInfoRepository.save(info);
+            } else {
+                logger.debug("Skipping duplicate StockPriceInfo for {} at {}", info.getStockCode(), info.getTime());
+            }
+        }
     }
 
     private void saveOrderBook(StockOrderBook orderBook) {
         stockOrderBookRepository.save(orderBook);
+    }
+
+    private void saveDailyCandles(List<StockDailyCandle> candles) {
+        for (StockDailyCandle candle : candles) {
+            // 중복 체크: 이미 존재하는 데이터면 저장하지 않음 (또는 업데이트)
+            // 여기서는 이미 존재하면 업데이트하지 않고 스킵하거나, 필요 시 업데이트 로직 추가
+            // findByStockCodeAndDate는 이미 Repository에 추가됨
+            if (stockDailyCandleRepository.findByStockCodeAndDate(candle.getStockCode(), candle.getDate()).isEmpty()) {
+                stockDailyCandleRepository.save(candle);
+            } else {
+                logger.debug("Skipping duplicate StockDailyCandle for {} at {}", candle.getStockCode(), candle.getDate());
+            }
+        }
     }
 }
