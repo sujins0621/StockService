@@ -1,20 +1,35 @@
 spring:
   application:
     name: KioomStock
-#  main:
-#    web-application-type: none # ? ??(Tomcat)? ??? ?? ???? ???? ?
+
+  datasource:
+    url:
+    username:
+    password:
+    driver-class-name: org.postgresql.Driver
+
+  jpa:
+    hibernate:
+      ddl-auto: update
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        format_sql: true
+        transaction:
+          jta:
+            platform: org.hibernate.engine.transaction.jta.platform.internal.NoJtaPlatform
+    show-sql: true
 
 logging:
   level:
     root: info
-    com.sjoh.kioomstock: debug # ??? ??? ??? ??? ??
+    com.sjoh.kioomstock: debug
   pattern:
-    console: "%d{HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n" # ?? ??? ??? ??
+    console: "%d{HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n"
 
 kiwoom:
   api:
-    # ???? REST API ??
-    base-url: "https://openapi.kiwoom.com"
-    key: "" # ?? Open API App Key
-    secret: "" # ?? Open API App Secret
-    customer-id: "" # ?? ID (???)
+    base-url: "https://api.kiwoom.com"
+    key: ""
+    secret: ""
+    customer-id: ""
