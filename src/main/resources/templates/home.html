@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <title>키움 주식 서비스</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body { font-family: sans-serif; margin: 20px; }
+        table { border-collapse: collapse; width: 100%; margin-top: 20px; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: center; }
+        th { background-color: #f2f2f2; }
+        .chart-container { width: 100%; height: 250px; margin-bottom: 50px; }
+    </style>
+</head>
+<body>
+
+<h1>키움 주식 서비스</h1>
+<button onclick="location.href='/login'">키움 로그인 (토큰 갱신)</button>
+
+<div th:if="${accountInfo != null}">
+    <h2>내 계좌 정보</h2>
+    <p><strong>계좌명:</strong> <span th:text="${accountInfo.accountName}"></span></p>
+    <p><strong>예수금:</strong> <span th:text="${#numbers.formatInteger(accountInfo.deposit, 0, 'COMMA')} + '원'"></span></p>
+    <p><strong>총평가금액:</strong> <span th:text="${#numbers.formatInteger(accountInfo.totalEvalAmount, 0, 'COMMA')} + '원'"></span></p>
+    <p><strong>누적수익률:</strong> <span th:text="${accountInfo.accumProfitRate} + '%'"></span></p>
+
+    <h3>보유 종목</h3>
+    <table>
+        <thead>
+        <tr>
+            <th>종목코드</th><th>종목명</th><th>보유수량</th><th>평균단가</th><th>현재가</th><th>평가금액</th><th>손익금액</th><th>손익률</th>
+        </tr>
+        </thead>
+        <tbody>
+        <tr th:each="stock : ${accountInfo.stockInfos}">
+            <td th:text="${stock.stockCode}"></td>
+            <td th:text="${stock.stockName}"></td>
+            <td th:text="${#numbers.formatInteger(stock.remainQty, 0, 'COMMA')}"></td>
+            <td th:text="${#numbers.formatDecimal(stock.avgPrice, 0, 'COMMA', 0, 'POINT')}"></td>
+            <td th:text="${#numbers.formatInteger(stock.currentPrice, 0, 'COMMA')}"></td>
+            <td th:text="${#numbers.formatInteger(stock.evalAmount, 0, 'COMMA')}"></td>
+            <td th:text="${#numbers.formatInteger(stock.profitLossAmount, 0, 'COMMA')}"></td>
+            <td th:text="${stock.profitLossRate} + '%'"></td>
+        </tr>
+        </tbody>
+    </table>
+</div>
+<div th:if="${accountInfo == null}">
+    <p>계좌 정보가 없습니다.</p>
+</div>
+
+<h2>주식 데이터 그래프</h2>
+<div class="chart-container">
+    <canvas id="stockChart"></canvas>
+</div>
+
+<h2>수집된 주식 데이터 (체결강도 & 호가잔량)</h2>
+<table>
+    <thead>
+    <tr>
+        <th>시간</th><th>종목코드</th><th>현재가</th><th>전일대비</th><th>등락률</th><th>거래량</th><th>누적거래대금</th><th>체결강도</th><th>5분</th><th>20분</th><th>60분</th><th>매도잔량</th><th>매수잔량</th>
+    </tr>
+    </thead>
+    <tbody>
+    <tr th:each="info : ${dataList}">
+        <td th:text="${#temporals.format(info.time, 'HH:mm:ss')}"></td>
+        <td th:text="${info.stockCode}"></td>
+        <td th:text="${#numbers.formatInteger(info.currentPrice, 0, 'COMMA')}"></td>
+        <td th:text="${#numbers.formatInteger(info.diffFromPrev, 0, 'COMMA')}"></td>
+        <td th:text="${info.fluctuationRate} + '%'"></td>
+        <td th:text="${#numbers.formatInteger(info.volume, 0, 'COMMA')}"></td>
+        <td th:text="${#numbers.formatInteger(info.accumulatedTradePrice, 0, 'COMMA')}"></td>
+        <td th:text="${info.volumePower}"></td>
+        <td th:text="${info.volumePower5Min}"></td>
+        <td th:text="${info.volumePower20Min}"></td>
+        <td th:text="${info.volumePower60Min}"></td>
+
+        <!-- 호가 잔량 매칭 로직 -->
+        <th:block th:with="key=${info.stockCode + '_' + #temporals.format(info.time, 'yyyyMMddHHmm')}">
+            <th:block th:with="matchedBook=${orderBookMap.get(key)}">
+                <td th:text="${matchedBook != null ? #numbers.formatInteger(matchedBook.totalSellRemain, 0, 'COMMA') : '-'}"></td>
+                <td th:text="${matchedBook != null ? #numbers.formatInteger(matchedBook.totalBuyRemain, 0, 'COMMA') : '-'}"></td>
+            </th:block>
+        </th:block>
+    </tr>
+    </tbody>
+</table>
+
+<script th:inline="javascript">
+    /*<![CDATA[*/
+    var labels = /*[[${labels}]]*/ [];
+    var prices = /*[[${prices}]]*/ [];
+    var powers = /*[[${powers}]]*/ [];
+    var volumes = /*[[${volumes}]]*/ [];
+    var sellRemains = /*[[${sellRemains}]]*/ [];
+    var buyRemains = /*[[${buyRemains}]]*/ [];
+
+    var ctx = document.getElementById('stockChart').getContext('2d');
+    var myChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: labels,
+            datasets: [
+                {
+                    label: '현재가',
+                    data: prices,
+                    borderColor: 'red',
+                    yAxisID: 'y-price',
+                    fill: false
+                },
+                {
+                    label: '체결강도',
+                    data: powers,
+                    borderColor: 'blue',
+                    yAxisID: 'y-power',
+                    fill: false
+                },
+                {
+                    label: '매도잔량',
+                    data: sellRemains,
+                    borderColor: 'green',
+                    yAxisID: 'y-volume', // 거래량과 같은 축 사용하거나 분리 가능
+                    fill: false,
+                    borderDash: [5, 5]
+                },
+                {
+                    label: '매수잔량',
+                    data: buyRemains,
+                    borderColor: 'orange',
+                    yAxisID: 'y-volume',
+                    fill: false,
+                    borderDash: [5, 5]
+                },
+                {
+                    label: '거래량',
+                    data: volumes,
+                    type: 'bar',
+                    backgroundColor: 'rgba(128, 128, 128, 0.5)',
+                    yAxisID: 'y-volume'
+                }
+            ]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: {
+                mode: 'index',
+                intersect: false,
+            },
+            scales: {
+                'y-price': {
+                    type: 'linear',
+                    display: true,
+                    position: 'left',
+                    title: { display: true, text: '가격' }
+                },
+                'y-power': {
+                    type: 'linear',
+                    display: true,
+                    position: 'right',
+                    title: { display: true, text: '체결강도' },
+                    grid: { drawOnChartArea: false }
+                },
+                'y-volume': {
+                    type: 'linear',
+                    display: true,
+                    position: 'right',
+                    title: { display: true, text: '수량' },
+                    grid: { drawOnChartArea: false }
+                }
+            }
+        }
+    });
+    /*]]>*/
+</script>
+
+</body>
+</html>
