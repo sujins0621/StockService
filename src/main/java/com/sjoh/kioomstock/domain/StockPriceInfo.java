@@ -24,17 +24,29 @@ public class StockPriceInfo {
     private String stockCode;       // 종목코드
 
     @Column(nullable = false)
-    private LocalDateTime time;     // 시간
+    private LocalDateTime time;     // 체결시간 (cntr_tm)
 
-    private double volumePower;     // 체결강도
+    private long currentPrice;      // 현재가 (cur_prc)
 
-    private long buyRemain;         // 매수잔량
+    private long diffFromPrev;      // 전일대비 (pred_pre)
 
-    private long sellRemain;        // 매도잔량
+    private String diffFromPrevSign; // 전일대비기호 (pred_pre_sig)
 
-    private long volume;            // 거래량
+    private double fluctuationRate; // 등락율 (flu_rt)
 
-    private long currentPrice;      // 현재가
+    private long volume;            // 거래량 (trde_qty)
 
-    private long openPrice;         // 시가
+    private long accumulatedTradePrice; // 누적거래대금 (acc_trde_prica)
+
+    private long accumulatedTradeVolume; // 누적거래량 (acc_trde_qty)
+
+    private double volumePower;     // 체결강도 (cntr_str)
+
+    private double volumePower5Min; // 체결강도5분 (cntr_str_5min)
+
+    private double volumePower20Min; // 체결강도20분 (cntr_str_20min)
+
+    private double volumePower60Min; // 체결강도60분 (cntr_str_60min)
+
+    private String exchangeType;    // 거래소구분 (stex_tp)
 }

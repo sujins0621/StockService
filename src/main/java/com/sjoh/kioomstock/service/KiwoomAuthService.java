@@ -5,12 +5,11 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
-import org.springframework.util.LinkedMultiValueMap;
-import org.springframework.util.MultiValueMap;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Mono;
 
 import jakarta.annotation.PostConstruct;
+import java.util.HashMap;
 import java.util.Map;
 
 @Service
@@ -55,21 +54,27 @@ public class KiwoomAuthService {
         }
         return refreshAccessToken();
     }
-//application/json;charset=UTF-8
+
     public Mono<String> refreshAccessToken() {
-        MultiValueMap<String, String> formData = new LinkedMultiValueMap<>();
-        formData.add("grant_type", "client_credentials");
-        formData.add("appkey", apiKey);
-        formData.add("appsecret", apiSecret);
+        logger.info("refreshAccessToken CALL");
+        // JSON 요청을 위해 Map 사용 (MultiValueMap은 배열로 직렬화될 수 있음)
+        Map<String, String> body = new HashMap<>();
+        body.put("grant_type", "client_credentials");
+        body.put("appkey", apiKey);
+        body.put("secretkey", apiSecret);
 
         return webClient.post()
                 .uri("/oauth2/token")
-                .contentType(MediaType.APPLICATION_FORM_URLENCODED)
-                .bodyValue(formData)
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(body)
                 .retrieve()
                 .bodyToMono(Map.class)
                 .map(response -> {
-                    String token = (String) response.get("access_token");
+                    String token = (String) response.get("token");
+                    if (token == null) {
+                        logger.error("Failed to retrieve access token. Response: {}", response);
+                        throw new RuntimeException("Access token not found in response: " + response);
+                    }
                     this.cachedToken = token;
                     return token;
                 });
