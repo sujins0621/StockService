@@ -1,13 +1,17 @@
 package com.sjoh.kioomstock.service;
 
 import com.sjoh.kioomstock.domain.StockDailyCandle;
+import com.sjoh.kioomstock.domain.StockInvestor;
 import com.sjoh.kioomstock.domain.StockOrderBook;
 import com.sjoh.kioomstock.domain.StockPriceInfo;
 import com.sjoh.kioomstock.repository.StockDailyCandleRepository;
+import com.sjoh.kioomstock.repository.StockInvestorRepository;
 import com.sjoh.kioomstock.repository.StockOrderBookRepository;
 import com.sjoh.kioomstock.repository.StockPriceInfoRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.EventListener;
 import org.springframework.http.MediaType;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
@@ -34,22 +38,36 @@ public class StockDataService {
     private final StockPriceInfoRepository stockPriceInfoRepository;
     private final StockOrderBookRepository stockOrderBookRepository;
     private final StockDailyCandleRepository stockDailyCandleRepository;
+    private final StockInvestorRepository stockInvestorRepository;
 
     // 모니터링할 종목 리스트 (예: 삼성전자 005930)
-    private final List<String> targetStockCodes = List.of("005930");
+    private final List<String> targetStockCodes = List.of("005930","000660","122630","114800");
 
-    public StockDataService(WebClient webClient, KiwoomAuthService authService, StockPriceInfoRepository stockPriceInfoRepository, StockOrderBookRepository stockOrderBookRepository, StockDailyCandleRepository stockDailyCandleRepository) {
+    public StockDataService(WebClient webClient, KiwoomAuthService authService, StockPriceInfoRepository stockPriceInfoRepository, StockOrderBookRepository stockOrderBookRepository, StockDailyCandleRepository stockDailyCandleRepository, StockInvestorRepository stockInvestorRepository) {
         this.webClient = webClient;
         this.authService = authService;
         this.stockPriceInfoRepository = stockPriceInfoRepository;
         this.stockOrderBookRepository = stockOrderBookRepository;
         this.stockDailyCandleRepository = stockDailyCandleRepository;
+        this.stockInvestorRepository = stockInvestorRepository;
+    }
+
+    // 서버 시작 시 1회 실행 (테스트용)
+    @EventListener(ApplicationReadyEvent.class)
+    public void initDataCollection() {
+        logger.info("Executing initial data collection on startup...");
+        collectStockData();
     }
 
     // 평일 09:00 ~ 15:30 사이에 1분마다 실행 (장 운영 시간)
-    // 테스트를 위해 cron 표현식을 매 분마다 실행되도록 수정하거나, 현재 시간이 범위 내인지 확인 필요
-    @Scheduled(cron = "0 * * * * *") // 테스트를 위해 시간 제한 제거 (매 분 실행)
+    @Scheduled(cron = "0 * 9-15 * * MON-FRI")
     public void collectStockData() {
+        // 현재 시간이 15:30 이후인지 체크 (15시 대에는 0~59분 모두 실행되므로)
+        LocalTime now = LocalTime.now();
+        if (now.getHour() == 15 && now.getMinute() > 30) {
+            return;
+        }
+
         logger.info("Starting scheduled stock data collection...");
 
         authService.getAccessToken()
@@ -57,11 +75,13 @@ public class StockDataService {
                         .flatMap(code -> Mono.zip(
                                 fetchStockPrice(token, code),
                                 fetchOrderBook(token, code),
-                                fetchDailyCandle(token, code)
+                                fetchDailyCandle(token, code),
+                                fetchInvestorInfo(token, code)
                         ).doOnNext(tuple -> {
                             List<StockPriceInfo> priceInfos = tuple.getT1();
                             StockOrderBook orderBook = tuple.getT2();
                             List<StockDailyCandle> dailyCandles = tuple.getT3();
+                            List<StockInvestor> investors = tuple.getT4();
 
                             if (priceInfos != null && !priceInfos.isEmpty()) {
                                 logger.info("Collected {} data points for {}", priceInfos.size(), code);
@@ -74,6 +94,10 @@ public class StockDataService {
                             if (dailyCandles != null && !dailyCandles.isEmpty()) {
                                 logger.info("Collected {} daily candles for {}", dailyCandles.size(), code);
                                 saveDailyCandles(dailyCandles);
+                            }
+                            if (investors != null && !investors.isEmpty()) {
+                                logger.info("Collected {} investor records for {}", investors.size(), code);
+                                saveInvestors(investors);
                             }
                         }).onErrorResume(error -> {
                             logger.error("Error collecting data for {}", code, error);
@@ -157,6 +181,34 @@ public class StockDataService {
                 });
     }
 
+    private Mono<List<StockInvestor>> fetchInvestorInfo(String token, String stockCode) {
+        logger.info("fetchInvestorInfo CALL for {}", stockCode);
+
+        Map<String, String> requestBody = new HashMap<>();
+        requestBody.put("dt", LocalDate.now().format(DateTimeFormatter.ofPattern("yyyyMMdd")));
+        requestBody.put("stk_cd", stockCode);
+        requestBody.put("amt_qty_tp", "2"); // 1:금액, 2:수량 (예제는 수량 기준인듯)
+        requestBody.put("trde_tp", "0"); // 0:순매수
+        requestBody.put("unit_tp", "1"); // 1:단주
+
+        return webClient.post()
+                .uri("/api/dostk/stkinfo")
+                .contentType(MediaType.APPLICATION_JSON)
+                .header("Authorization", "Bearer " + token)
+                .header("api-id", "ka10059")
+                .bodyValue(requestBody)
+                .retrieve()
+                .bodyToMono(Map.class)
+                .map(response -> {
+                    logger.info("Investor API Response for {}: {}", stockCode, response);
+                    return parseInvestorResponse(stockCode, (Map<String, Object>) response);
+                })
+                .onErrorResume(e -> {
+                    logger.error("Investor API call failed for {}: {}", stockCode, e.getMessage());
+                    return Mono.just(List.of());
+                });
+    }
+
     @SuppressWarnings("unchecked")
     private List<StockPriceInfo> parseResponse(String stockCode, Map<String, Object> response) {
         try {
@@ -233,6 +285,30 @@ public class StockDataService {
         }
     }
 
+    @SuppressWarnings("unchecked")
+    private List<StockInvestor> parseInvestorResponse(String stockCode, Map<String, Object> response) {
+        try {
+            List<Map<String, String>> investorData = (List<Map<String, String>>) response.get("stk_invsr_orgn");
+
+            if (investorData == null || investorData.isEmpty()) {
+                logger.warn("No investor data found for {}: {}", stockCode, response);
+                return List.of();
+            }
+
+            // 오늘 날짜 데이터만 필터링
+            LocalDate today = LocalDate.now();
+
+            return investorData.stream()
+                    .map(data -> mapToStockInvestor(stockCode, data))
+                    .filter(investor -> investor.getDate().isEqual(today)) // 오늘 날짜만 포함
+                    .collect(Collectors.toList());
+
+        } catch (Exception e) {
+            logger.error("Error parsing investor response for {}: {}", stockCode, e.getMessage());
+            return List.of();
+        }
+    }
+
     private StockPriceInfo mapToStockPriceInfo(String stockCode, Map<String, String> data) {
         LocalDateTime time = LocalDateTime.now();
         String timeStr = data.get("cntr_tm");
@@ -302,6 +378,42 @@ public class StockDataService {
                 .build();
     }
 
+    private StockInvestor mapToStockInvestor(String stockCode, Map<String, String> data) {
+        LocalDate date = LocalDate.now();
+        String dateStr = data.get("dt");
+        if (dateStr != null && dateStr.length() == 8) {
+            try {
+                date = LocalDate.parse(dateStr, DateTimeFormatter.ofPattern("yyyyMMdd"));
+            } catch (Exception e) {
+                logger.warn("Failed to parse date: {}", dateStr);
+            }
+        }
+
+        return StockInvestor.builder()
+                .time(LocalDateTime.now()) // 수집 시간 저장 (StockPriceInfo와 동일한 타입)
+                .stockCode(stockCode)
+                .date(date)
+                .currentPrice(parseLong(data.get("cur_prc")))
+                .changeFromPrev(parseLong(data.get("pred_pre")))
+                .fluctuationRate(parseDouble(data.get("flu_rt")))
+                .volume(parseLong(data.get("acc_trde_qty")))
+                .tradingValue(parseLong(data.get("acc_trde_prica")))
+                .individual(parseLong(data.get("ind_invsr")))
+                .foreigner(parseLong(data.get("frgnr_invsr")))
+                .institution(parseLong(data.get("orgn")))
+                .financialInvestment(parseLong(data.get("fnnc_invt")))
+                .insurance(parseLong(data.get("insrnc")))
+                .investmentTrust(parseLong(data.get("invtrt")))
+                .etcFinance(parseLong(data.get("etc_fnnc")))
+                .bank(parseLong(data.get("bank")))
+                .pensionFund(parseLong(data.get("penfnd_etc")))
+                .privateFund(parseLong(data.get("samo_fund")))
+                .nation(parseLong(data.get("natn")))
+                .etcCorp(parseLong(data.get("etc_corp")))
+                .foreignNational(parseLong(data.get("natfor")))
+                .build();
+    }
+
     private String getString(Map<String, Object> data, String key) {
         return data.getOrDefault(key, "").toString();
     }
@@ -358,5 +470,11 @@ public class StockDataService {
                 logger.debug("Skipping duplicate StockDailyCandle for {} at {}", candle.getStockCode(), candle.getDate());
             }
         }
+    }
+
+    private void saveInvestors(List<StockInvestor> investors) {
+        // 투자자 정보는 timestamp가 키이므로 중복 체크 없이 저장 (또는 필요 시 로직 추가)
+        // 여기서는 매번 수집 시마다 새로운 timestamp로 저장됨
+        stockInvestorRepository.saveAll(investors);
     }
 }

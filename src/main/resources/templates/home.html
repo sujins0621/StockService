@@ -48,27 +48,45 @@
 </div>
 
 <h2>주식 데이터 그래프</h2>
+
+<!-- 종목 필터링 폼 -->
+<form action="/" method="get" style="margin-bottom: 20px;">
+    <label for="stockCode">종목 선택:</label>
+    <select name="stockCode" id="stockCode" onchange="this.form.submit()">
+        <option value="">전체 보기</option>
+        <option th:each="code : ${stockCodes}"
+                th:value="${code}"
+                th:text="${code}"
+                th:selected="${code == selectedStockCode}"></option>
+    </select>
+</form>
+
 <div class="chart-container">
     <canvas id="stockChart"></canvas>
 </div>
 
-<h2>수집된 주식 데이터 (체결강도 & 호가잔량)</h2>
+<h2>수집된 주식 데이터 (체결강도 & 호가잔량 & 투자자)</h2>
 <table>
     <thead>
     <tr>
-        <th>시간</th><th>종목코드</th><th>현재가</th><th>전일대비</th><th>등락률</th><th>거래량</th><th>누적거래대금</th><th>체결강도</th><th>5분</th><th>20분</th><th>60분</th><th>매도잔량</th><th>매수잔량</th>
+        <th>시간</th><th>종목코드</th><th>현재가</th><th>전일대비</th><th>등락률</th><th>거래량</th><th>누적거래대금</th><th>체결강도</th><th>5분</th><th>20분</th><th>60분</th><th>매도잔량</th><th>매수잔량</th><th>외국인</th><th>기관</th><th>개인</th>
     </tr>
     </thead>
     <tbody>
     <tr th:each="info : ${dataList}">
         <td th:text="${#temporals.format(info.time, 'HH:mm:ss')}"></td>
         <td th:text="${info.stockCode}"></td>
-        <td th:text="${#numbers.formatInteger(info.currentPrice, 0, 'COMMA')}"></td>
+        <!-- 현재가 절대값 처리 -->
+        <td th:text="${#numbers.formatInteger(T(java.lang.Math).abs(info.currentPrice), 0, 'COMMA')}"></td>
         <td th:text="${#numbers.formatInteger(info.diffFromPrev, 0, 'COMMA')}"></td>
         <td th:text="${info.fluctuationRate} + '%'"></td>
         <td th:text="${#numbers.formatInteger(info.volume, 0, 'COMMA')}"></td>
         <td th:text="${#numbers.formatInteger(info.accumulatedTradePrice, 0, 'COMMA')}"></td>
-        <td th:text="${info.volumePower}"></td>
+
+        <!-- 체결강도 스타일 적용 -->
+        <td th:text="${info.volumePower}"
+            th:style="${styleHelper.getVolumePowerStyle(info.volumePower)}"></td>
+
         <td th:text="${info.volumePower5Min}"></td>
         <td th:text="${info.volumePower20Min}"></td>
         <td th:text="${info.volumePower60Min}"></td>
@@ -76,8 +94,43 @@
         <!-- 호가 잔량 매칭 로직 -->
         <th:block th:with="key=${info.stockCode + '_' + #temporals.format(info.time, 'yyyyMMddHHmm')}">
             <th:block th:with="matchedBook=${orderBookMap.get(key)}">
-                <td th:text="${matchedBook != null ? #numbers.formatInteger(matchedBook.totalSellRemain, 0, 'COMMA') : '-'}"></td>
-                <td th:text="${matchedBook != null ? #numbers.formatInteger(matchedBook.totalBuyRemain, 0, 'COMMA') : '-'}"></td>
+                <!-- 매도잔량 셀 -->
+                <td th:if="${matchedBook != null}"
+                    th:text="${#numbers.formatInteger(matchedBook.totalSellRemain, 0, 'COMMA')}"
+                    th:style="${styleHelper.getSellRemainStyle(matchedBook.totalSellRemain, matchedBook.totalBuyRemain)}">
+                </td>
+                <td th:if="${matchedBook == null}">-</td>
+
+                <!-- 매수잔량 셀 -->
+                <td th:if="${matchedBook != null}"
+                    th:text="${#numbers.formatInteger(matchedBook.totalBuyRemain, 0, 'COMMA')}"
+                    th:style="${styleHelper.getBuyRemainStyle(matchedBook.totalSellRemain, matchedBook.totalBuyRemain)}">
+                </td>
+                <td th:if="${matchedBook == null}">-</td>
+            </th:block>
+
+            <!-- 투자자 정보 매칭 로직 -->
+            <th:block th:with="matchedInvestor=${investorMap.get(key)}">
+                <!-- 외국인 -->
+                <td th:if="${matchedInvestor != null}"
+                    th:text="${#numbers.formatInteger(matchedInvestor.foreigner, 0, 'COMMA')}"
+                    th:style="${styleHelper.getInvestorStyle(matchedInvestor.foreigner)}">
+                </td>
+                <td th:if="${matchedInvestor == null}">-</td>
+
+                <!-- 기관 -->
+                <td th:if="${matchedInvestor != null}"
+                    th:text="${#numbers.formatInteger(matchedInvestor.institution, 0, 'COMMA')}"
+                    th:style="${styleHelper.getInvestorStyle(matchedInvestor.institution)}">
+                </td>
+                <td th:if="${matchedInvestor == null}">-</td>
+
+                <!-- 개인 -->
+                <td th:if="${matchedInvestor != null}"
+                    th:text="${#numbers.formatInteger(matchedInvestor.individual, 0, 'COMMA')}"
+                    th:style="${styleHelper.getInvestorStyle(matchedInvestor.individual)}">
+                </td>
+                <td th:if="${matchedInvestor == null}">-</td>
             </th:block>
         </th:block>
     </tr>
